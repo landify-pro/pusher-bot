@@ -1,5 +1,4 @@
 import os
-import json
 import asyncio
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
@@ -24,12 +23,12 @@ MENTORS = {
     "hartman": {
         "name": "Хартман",
         "emoji": "⚡",
-        "prompt": "Ты — Хартман, жёсткий drill sergeant. Кричишь, давишь, не даёшь расслабиться. Каждое слово как пинок. Требуешь действий прямо сейчас. Максимум 3 предложения. Без мягкости."
+        "prompt": "Ты — жёсткий сержант-наставник в стиле Хартмана. Кричишь, давишь, не даёшь расслабиться. Каждое слово как пинок. Требуешь действий прямо сейчас. Максимум 3 предложения."
     },
-    "torbасов": {
+    "torbasov": {
         "name": "Торбасов",
         "emoji": "🎯",
-        "prompt": "Ты — Антон Торбасов, эксперт по недвижимости и бизнесу. Говоришь уверенно, со знанием дела. Даёшь конкретные стратегии. Мотивируешь через логику и факты. Максимум 3 предложения."
+        "prompt": "Ты — Антон Торбасов, эксперт по бизнесу и недвижимости. Говоришь уверенно, со знанием дела. Даёшь конкретные стратегии. Мотивируешь через логику и факты. Максимум 3 предложения."
     }
 }
 
@@ -46,20 +45,15 @@ def get_user(user_id):
     return user_data[user_id]
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    user = get_user(user_id)
-    
     keyboard = [
         [InlineKeyboardButton("🔥 Тиньков", callback_data="mentor_tinkov"),
          InlineKeyboardButton("💡 Осипов", callback_data="mentor_osipov")],
         [InlineKeyboardButton("⚡ Хартман", callback_data="mentor_hartman"),
-         InlineKeyboardButton("🎯 Торбасов", callback_data="mentor_torbасов")]
+         InlineKeyboardButton("🎯 Торбасов", callback_data="mentor_torbasov")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    
     await update.message.reply_text(
-        "👊 *PUSHER — твой личный AI-наставник*\n\n"
-        "Выбери наставника который будет тебя пушить:",
+        "👊 *PUSHER — твой личный AI-наставник*\n\nВыбери наставника который будет тебя пушить:",
         parse_mode="Markdown",
         reply_markup=reply_markup
     )
@@ -67,17 +61,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def mentor_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    
     user_id = query.from_user.id
     user = get_user(user_id)
-    
     mentor_key = query.data.replace("mentor_", "")
     user["mentor"] = mentor_key
+    user["goal"] = ""
+    user["history"] = []
     mentor = MENTORS[mentor_key]
-    
     await query.edit_message_text(
-        f"{mentor['emoji']} *Наставник: {mentor['name']}*\n\n"
-        f"Теперь расскажи — какая твоя главная цель на этот месяц?",
+        f"{mentor['emoji']} *Наставник: {mentor['name']}*\n\nТеперь расскажи — какая твоя главная цель на этот месяц?",
         parse_mode="Markdown"
     )
 
@@ -85,11 +77,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     user = get_user(user_id)
     text = update.message.text
-    
+
     if not user["mentor"]:
         await start(update, context)
         return
-    
+
     if not user["goal"]:
         user["goal"] = text
         mentor = MENTORS[user["mentor"]]
@@ -99,70 +91,60 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"• Просто писать мне — отвечу как {mentor['name']}\n"
             f"• /tasks — список задач на день\n"
             f"• /add задача — добавить задачу\n"
-            f"• /done — отметить выполненное\n"
             f"• /checkin — еженедельный разбор\n"
             f"• /mentor — сменить наставника",
             parse_mode="Markdown"
         )
         return
-    
+
     mentor = MENTORS[user["mentor"]]
     user["history"].append({"role": "user", "content": text})
-    
     if len(user["history"]) > 10:
         user["history"] = user["history"][-10:]
-    
+
     try:
         response = client.messages.create(
             model="claude-sonnet-4-20250514",
             max_tokens=300,
-            system=mentor["prompt"] + f"\n\nЦель пользователя: {user['goal']}\nЗадачи сегодня: {', '.join(user['tasks']) if user['tasks'] else 'не поставлены'}",
+            system=mentor["prompt"] + f"\n\nЦель пользователя: {user['goal']}\nЗадачи сегодня: {', '.join([t['text'] for t in user['tasks']]) if user['tasks'] else 'не поставлены'}",
             messages=user["history"]
         )
         reply = response.content[0].text
         user["history"].append({"role": "assistant", "content": reply})
         await update.message.reply_text(f"{mentor['emoji']} {reply}")
     except Exception as e:
-        await update.message.reply_text("Ошибка соединения. Попробуй снова.")
+        await update.message.reply_text(f"Ошибка: {str(e)[:100]}")
 
 async def tasks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     user = get_user(user_id)
-    
     if not user["tasks"]:
-        await update.message.reply_text("📋 Задач нет. Добавь: /add купить хлеб")
+        await update.message.reply_text("📋 Задач нет. Добавь: /add позвонить клиенту")
         return
-    
     task_list = "\n".join([f"{'✅' if t.get('done') else '⬜'} {t['text']}" for t in user["tasks"]])
     done = sum(1 for t in user["tasks"] if t.get("done"))
-    await update.message.reply_text(f"📋 *Задачи на сегодня* ({done}/{len(user['tasks'])}):\n\n{task_list}", parse_mode="Markdown")
+    await update.message.reply_text(f"📋 *Задачи ({done}/{len(user['tasks'])}):\n\n{task_list}", parse_mode="Markdown")
 
 async def add_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     user = get_user(user_id)
-    
     task_text = " ".join(context.args)
     if not task_text:
         await update.message.reply_text("Напиши задачу: /add позвонить клиенту")
         return
-    
     user["tasks"].append({"text": task_text, "done": False})
-    await update.message.reply_text(f"✅ Задача добавлена: {task_text}")
+    await update.message.reply_text(f"✅ Добавлено: {task_text}")
 
 async def checkin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     user = get_user(user_id)
-    
     if not user["mentor"]:
         await start(update, context)
         return
-    
     mentor = MENTORS[user["mentor"]]
     done = sum(1 for t in user["tasks"] if t.get("done"))
     total = len(user["tasks"])
-    
     checkin_prompt = f"Проведи жёсткий еженедельный разбор. Цель пользователя: {user['goal']}. Выполнено задач: {done} из {total}. Задай 2 неудобных вопроса и дай один конкретный совет."
-    
     try:
         response = client.messages.create(
             model="claude-sonnet-4-20250514",
@@ -171,13 +153,12 @@ async def checkin(update: Update, context: ContextTypes.DEFAULT_TYPE):
             messages=[{"role": "user", "content": checkin_prompt}]
         )
         await update.message.reply_text(f"{mentor['emoji']} *Еженедельный разбор:*\n\n{response.content[0].text}", parse_mode="Markdown")
-    except:
-        await update.message.reply_text("Ошибка. Попробуй снова.")
+    except Exception as e:
+        await update.message.reply_text(f"Ошибка: {str(e)[:100]}")
 
 async def change_mentor(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    user = get_user(user_id)
-    user["mentor"] = None
+    get_user(user_id)["mentor"] = None
     await start(update, context)
 
 def main():
